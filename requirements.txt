@@ -1,1 +1,4 @@
-pyTelegramBotAPI
+pyrogram==2.0.0
+tgcrypto
+requests
+python-dotenv
