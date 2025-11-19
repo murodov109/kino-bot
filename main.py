@@ -25,8 +25,10 @@ mandatory_channels = []
 film_channels = []
 user_states = {}
 total_users = set()
-daily_searches = 0
-total_searches = 0
+stats = {
+    'daily_searches': 0,
+    'total_searches': 0
+}
 
 def admin_menu():
     return ReplyKeyboardMarkup([
@@ -161,8 +163,8 @@ async def text_handler(client, message):
                 await message.reply(
                     f"📊 **Bot statistikasi**\n\n"
                     f"👥 Jami foydalanuvchilar: {len(total_users)}\n"
-                    f"🔍 Bugungi qidiruvlar: {daily_searches}\n"
-                    f"📈 Jami qidiruvlar: {total_searches}\n"
+                    f"🔍 Bugungi qidiruvlar: {stats['daily_searches']}\n"
+                    f"📈 Jami qidiruvlar: {stats['total_searches']}\n"
                     f"🎬 Film kanallari: {len(film_channels)}\n"
                     f"📢 Majburiy kanallar: {len(mandatory_channels)}\n"
                     f"📅 Sana: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -198,7 +200,7 @@ async def text_handler(client, message):
                     await asyncio.sleep(e.value)
                 except UserIsBlocked:
                     failed += 1
-                except Exception as e:
+                except Exception:
                     failed += 1
             user_states.pop(user_id, None)
             await message.reply(
@@ -258,9 +260,8 @@ async def text_handler(client, message):
                 )
                 return
             
-            global daily_searches, total_searches
-            daily_searches += 1
-            total_searches += 1
+            stats['daily_searches'] += 1
+            stats['total_searches'] += 1
             
             wait_msg = await message.reply("🔍 Qidirilmoqda...")
             results = await search_films(text)
