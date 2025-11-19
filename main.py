@@ -1,187 +1,107 @@
-import telebot
-import sqlite3
-from telebot import types
+import os, requests, asyncio, json
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv
 
-TOKEN = "8162229291:AAH5g9PEu3nIgPnW9E2166XYDCizYi700_c"
-OWNER_ID = 7617397626
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = telebot.TeleBot(TOKEN)
+TMDB_KEY = "YOUR_TMDB_KEY"
 
-conn = sqlite3.connect("kino.db", check_same_thread=False)
-cur = conn.cursor()
+if not os.path.exists("sub_channels.json"): json.dump([],open("sub_channels.json","w"))
+if not os.path.exists("film_channels.json"): json.dump([],open("film_channels.json","w"))
 
-cur.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-cur.execute("CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS films (code TEXT, file_id TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
-conn.commit()
+def load_sub_channels(): return json.load(open("sub_channels.json"))
+def save_sub_channels(lst): json.dump(lst,open("sub_channels.json","w"))
 
-def is_subscribed(user_id):
-    cur.execute("SELECT username FROM channels")
-    channels = cur.fetchall()
-    if not channels:
-        return True
-    for ch in channels:
-        try:
-            res = bot.get_chat_member(ch[0], user_id)
-            if res.status in ["left", "kicked"]:
-                return False
-        except:
-            pass
-    return True
+def load_film_channels(): return json.load(open("film_channels.json"))
+def save_film_channels(lst): json.dump(lst,open("film_channels.json","w"))
 
-@bot.message_handler(commands=["start"])
-def start(msg):
-    user_id = msg.from_user.id
-    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    cur.execute("SELECT username FROM channels")
-    channels = cur.fetchall()
-    if channels:
-        markup = types.InlineKeyboardMarkup()
-        for ch in channels:
-            markup.add(types.InlineKeyboardButton(text=ch[0], url=f"https://t.me/{ch[0].replace('@','')}"))
-        markup.add(types.InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_sub"))
-        bot.send_message(user_id, "Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling 👇", reply_markup=markup)
+app = Client("film-bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
+
+def user_buttons():
+    sub_channels = load_sub_channels()
+    buttons = [[InlineKeyboardButton(f"📌 {ch} ▶",url=f"https://t.me/{ch.replace('-100','')}")] for ch in sub_channels]
+    buttons.append([InlineKeyboardButton("✅ Tasdiqlash",callback_data="check_sub")])
+    return InlineKeyboardMarkup(buttons)
+
+def admin_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Film yuklash",callback_data="upload")],
+        [InlineKeyboardButton("🎬 Film ma'lumotlari",callback_data="info")],
+        [InlineKeyboardButton("⚙ Admin panel",callback_data="admin_panel")],
+        [InlineKeyboardButton("⛔ Chiqish",callback_data="logout")]
+    ])
+
+def admin_panel_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Majburiy obuna kanal qo‘shish",callback_data="add_sub")],
+        [InlineKeyboardButton("➖ Majburiy obuna kanal o‘chirish",callback_data="remove_sub")],
+        [InlineKeyboardButton("📜 Majburiy obuna kanallari",callback_data="list_sub")],
+        [InlineKeyboardButton("➕ Film qidirish kanal qo‘shish",callback_data="add_film")],
+        [InlineKeyboardButton("➖ Film qidirish kanal o‘chirish",callback_data="remove_film")],
+        [InlineKeyboardButton("📜 Film qidirish kanallari",callback_data="list_film")],
+        [InlineKeyboardButton("⛔ Admin paneldan chiqish",callback_data="logout")]
+    ])
+
+async def find_video(client, title):
+    res=[]
+    for ch in load_film_channels():
+        async for msg in client.get_chat_history(ch, limit=3000):
+            if msg.video and msg.caption and title.lower() in msg.caption.lower(): res.append(msg)
+    return res
+
+def search_tmdb(title):
+    r = requests.get(f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_KEY}&query={title}").json()
+    if r["results"]: return r["results"][0]
+    return None
+
+@app.on_message(filters.private & filters.command("start"))
+async def start(c, m):
+    if m.from_user.id == ADMIN_ID:
+        await m.reply("🛠 Admin panel", reply_markup=admin_buttons())
     else:
-        bot.send_message(user_id, "🎬 Film kodini kiriting:")
-        bot.register_next_step_handler(msg, get_film)
+        await m.reply("🎬 Salom! Film nomini kiriting.", reply_markup=user_buttons())
 
-@bot.callback_query_handler(func=lambda c: c.data == "check_sub")
-def check_sub(c):
-    if is_subscribed(c.from_user.id):
-        bot.delete_message(c.message.chat.id, c.message.message_id)
-        bot.send_message(c.from_user.id, f"Salom @{c.from_user.username or 'foydalanuvchi'}! 🎬 Film kodini kiriting:")
-        bot.register_next_step_handler_by_chat_id(c.from_user.id, get_film)
-    else:
-        bot.answer_callback_query(c.id, "❗Avval barcha kanallarga obuna bo‘ling!")
+@app.on_message(filters.private & filters.text)
+async def user_panel(c, m):
+    if m.from_user.id != ADMIN_ID:
+        title = m.text.strip()
+        movie = search_tmdb(title)
+        if movie:
+            videos = await find_video(c, title)
+            if videos:
+                for v in videos: await m.reply_video(v.video.file_id, caption=v.caption, reply_markup=user_buttons())
+            else: await m.reply("❌ Film kanalda topilmadi!")
+        else: await m.reply("❌ Film TMDB da topilmadi!")
 
-def get_film(msg):
-    code = msg.text.strip()
-    cur.execute("SELECT file_id FROM films WHERE code=?", (code,))
-    res = cur.fetchone()
-    if res:
-        bot.send_video(msg.chat.id, res[0], caption="🎬 Marhamat, film tayyor!")
-    else:
-        bot.send_message(msg.chat.id, "❌ Bunday kodli film topilmadi.")
+@app.on_callback_query()
+async def callback(c,q):
+    sub_channels = load_sub_channels()
+    film_channels = load_film_channels()
+    data = q.data
 
-@bot.message_handler(commands=["admin"])
-def admin_panel(msg):
-    if msg.from_user.id == OWNER_ID:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📊 Statistika", "🎞 Film joylash", "➕ Admin qo‘shish")
-        markup.add("📢 Reklama", "📺 Kanal sozlash")
-        bot.send_message(msg.chat.id, "Admin paneliga xush kelibsiz!", reply_markup=markup)
-    else:
-        cur.execute("SELECT user_id FROM admins WHERE user_id=?", (msg.from_user.id,))
-        if cur.fetchone():
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            markup.add("🎞 Film joylash")
-            bot.send_message(msg.chat.id, "🎬 Siz film joylay olasiz!", reply_markup=markup)
-        else:
-            bot.send_message(msg.chat.id, "Siz admin emassiz.")
+    if data == "check_sub":
+        ok=True
+        for ch in sub_channels:
+            member=await c.get_chat_member(ch,q.from_user.id)
+            if member.status=="left": ok=False; break
+        await q.answer("✅ Barcha kanallarga obuna bo‘ldingiz!" if ok else "❌ Iltimos barcha kanallarga obuna bo‘ling!")
 
-@bot.message_handler(func=lambda m: m.text == "📊 Statistika")
-def stats(msg):
-    if msg.from_user.id == OWNER_ID:
-        cur.execute("SELECT COUNT(*) FROM users")
-        users = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM films")
-        films = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM admins")
-        admins = cur.fetchone()[0]
-        bot.send_message(msg.chat.id, f"👥 Foydalanuvchilar: {users}\n🎞 Filmlar: {films}\n👑 Adminlar: {admins}")
+    elif data=="admin_panel" and q.from_user.id==ADMIN_ID:
+        await q.message.edit_text("⚙ Admin panel",reply_markup=admin_panel_buttons())
+    elif data=="logout" and q.from_user.id==ADMIN_ID:
+        await q.message.edit_text("Chiqdingiz",reply_markup=user_buttons())
+    elif q.from_user.id==ADMIN_ID:
+        if data=="list_sub": await q.answer("📜 "+", ".join(sub_channels) if sub_channels else "❌ Ro'yxat bo'sh")
+        elif data=="list_film": await q.answer("📜 "+", ".join(film_channels) if film_channels else "❌ Ro'yxat bo'sh")
+        elif data=="add_sub": sub_channels.append("example_channel"); save_sub_channels(sub_channels); await q.answer("➕ Kanal qo‘shildi")
+        elif data=="remove_sub" and sub_channels: sub_channels.pop(); save_sub_channels(sub_channels); await q.answer("➖ Kanal o‘chirildi")
+        elif data=="add_film": film_channels.append("example_film_channel"); save_film_channels(film_channels); await q.answer("➕ Film kanali qo‘shildi")
+        elif data=="remove_film" and film_channels: film_channels.pop(); save_film_channels(film_channels); await q.answer("➖ Film kanali o‘chirildi")
+        elif data in ["upload","info"]: await q.answer("ℹ️ Bu tugma hozir ishlamaydi!")
 
-@bot.message_handler(func=lambda m: m.text == "🎞 Film joylash")
-def upload_film(msg):
-    bot.send_message(msg.chat.id, "🎬 Film kodini kiriting:")
-    bot.register_next_step_handler(msg, get_code)
-
-def get_code(msg):
-    code = msg.text.strip()
-    bot.send_message(msg.chat.id, "🎥 Endi filmni MP4 shaklda yuboring:")
-    bot.register_next_step_handler(msg, save_film, code)
-
-def save_film(msg, code):
-    if msg.video:
-        file_id = msg.video.file_id
-        cur.execute("INSERT INTO films (code, file_id) VALUES (?,?)", (code, file_id))
-        conn.commit()
-        bot.send_message(msg.chat.id, "✅ Film muvaffaqiyatli saqlandi!")
-    else:
-        bot.send_message(msg.chat.id, "❌ Faqat MP4 video yuboring.")
-
-@bot.message_handler(func=lambda m: m.text == "➕ Admin qo‘shish")
-def add_admin(msg):
-    if msg.from_user.id == OWNER_ID:
-        bot.send_message(msg.chat.id, "Yangi admin ID sini kiriting:")
-        bot.register_next_step_handler(msg, save_admin)
-
-def save_admin(msg):
-    try:
-        admin_id = int(msg.text)
-        cur.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
-        conn.commit()
-        bot.send_message(msg.chat.id, "✅ Admin qo‘shildi.")
-    except:
-        bot.send_message(msg.chat.id, "❌ Noto‘g‘ri ID.")
-
-@bot.message_handler(func=lambda m: m.text == "📺 Kanal sozlash")
-def channel_settings(msg):
-    if msg.from_user.id == OWNER_ID:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("➕ Kanal qo‘shish", "➖ Kanal o‘chirish", "⬅️ Ortga")
-        bot.send_message(msg.chat.id, "Kanal sozlamalari:", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: m.text == "➕ Kanal qo‘shish")
-def add_channel(msg):
-    if msg.from_user.id == OWNER_ID:
-        bot.send_message(msg.chat.id, "Kanal username ni kiriting (@ bilan):")
-        bot.register_next_step_handler(msg, save_channel)
-
-def save_channel(msg):
-    username = msg.text.strip()
-    cur.execute("INSERT INTO channels (username) VALUES (?)", (username,))
-    conn.commit()
-    bot.send_message(msg.chat.id, f"✅ {username} kanal qo‘shildi.")
-
-@bot.message_handler(func=lambda m: m.text == "➖ Kanal o‘chirish")
-def delete_channel(msg):
-    if msg.from_user.id == OWNER_ID:
-        cur.execute("SELECT username FROM channels")
-        chs = cur.fetchall()
-        if not chs:
-            bot.send_message(msg.chat.id, "❌ Hech qanday kanal yo‘q.")
-            return
-        markup = types.InlineKeyboardMarkup()
-        for ch in chs:
-            markup.add(types.InlineKeyboardButton(ch[0], callback_data=f"del_{ch[0]}"))
-        bot.send_message(msg.chat.id, "O‘chirmoqchi bo‘lgan kanalni tanlang:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("del_"))
-def delete_channel_confirm(c):
-    username = c.data[4:]
-    cur.execute("DELETE FROM channels WHERE username=?", (username,))
-    conn.commit()
-    bot.answer_callback_query(c.id, "✅ O‘chirildi!")
-    bot.delete_message(c.message.chat.id, c.message.message_id)
-
-@bot.message_handler(func=lambda m: m.text == "📢 Reklama")
-def broadcast(msg):
-    if msg.from_user.id == OWNER_ID:
-        bot.send_message(msg.chat.id, "Reklama xabarini yuboring:")
-        bot.register_next_step_handler(msg, send_broadcast)
-
-def send_broadcast(msg):
-    cur.execute("SELECT user_id FROM users")
-    users = cur.fetchall()
-    count = 0
-    for u in users:
-        try:
-            bot.copy_message(u[0], msg.chat.id, msg.message_id)
-            count += 1
-        except:
-            pass
-    bot.send_message(msg.chat.id, f"✅ Reklama {count} foydalanuvchiga yuborildi.")
-
-bot.polling(none_stop=True)
+app.run()
