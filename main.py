@@ -82,15 +82,17 @@ async def search_films(query):
     for channel in film_channels:
         try:
             async for message in app.get_chat_history(channel, limit=3000):
-                if message.text and query_lower in message.text.lower():
+                content = message.text or message.caption
+                if content and query_lower in content.lower():
                     results.append({
                         'channel': channel,
                         'message_id': message.id,
-                        'text': message.text[:100]
+                        'text': content[:100]
                     })
                     if len(results) >= 20:
                         break
-        except Exception:
+        except Exception as e:
+            print(f"Qidiruv xatosi {channel}: {e}")
             continue
         if len(results) >= 20:
             break
