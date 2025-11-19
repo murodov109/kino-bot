@@ -1,7 +1,9 @@
 import os
+import asyncio
+from datetime import datetime
 from dotenv import load_dotenv
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
 load_dotenv()
 
@@ -14,104 +16,331 @@ app = Client("film_bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
 
 mandatory_channels = []
 film_channels = []
+user_states = {}
+total_users = set()
+daily_searches = 0
+total_searches = 0
 
-async def check_subs(user_id):
+def admin_menu():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🎬 Film kanallari"), KeyboardButton("📢 Majburiy obuna")],
+        [KeyboardButton("📊 Statistika"), KeyboardButton("📣 Reklama tarqatish")],
+        [KeyboardButton("👤 Foydalanuvchi rejimi")]
+    ], resize_keyboard=True)
+
+def user_menu():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🎬 Film qidirish")],
+        [KeyboardButton("ℹ️ Bot haqida"), KeyboardButton("📞 Aloqa")]
+    ], resize_keyboard=True)
+
+def film_channel_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Kanal qo'shish", callback_data="add_film")],
+        [InlineKeyboardButton("➖ Kanal o'chirish", callback_data="del_film")],
+        [InlineKeyboardButton("📋 Ro'yxatni ko'rish", callback_data="list_film")],
+        [InlineKeyboardButton("🔙 Orqaga", callback_data="back_admin")]
+    ])
+
+def mandatory_channel_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Kanal qo'shish", callback_data="add_mand")],
+        [InlineKeyboardButton("➖ Kanal o'chirish", callback_data="del_mand")],
+        [InlineKeyboardButton("📋 Ro'yxatni ko'rish", callback_data="list_mand")],
+        [InlineKeyboardButton("🔙 Orqaga", callback_data="back_admin")]
+    ])
+
+def subscription_buttons():
+    buttons = []
+    for i, ch in enumerate(mandatory_channels, 1):
+        ch_name = ch.replace("@", "")
+        buttons.append([InlineKeyboardButton(f"📢 {i}-Kanal", url=f"https://t.me/{ch_name}")])
+    buttons.append([InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_sub")])
+    return InlineKeyboardMarkup(buttons)
+
+async def check_subscription(user_id):
+    if not mandatory_channels:
+        return True
     for ch in mandatory_channels:
         try:
-            m = await app.get_chat_member(ch, user_id)
-            if m.status in ["left", "kicked"]:
+            member = await app.get_chat_member(ch, user_id)
+            if member.status in ["left", "kicked"]:
                 return False
         except:
             return False
     return True
 
-async def search_film(name):
-    res = []
-    for ch in film_channels:
-        async for m in app.get_chat_history(ch, limit=3000):
-            if m.text and name.lower() in m.text.lower():
-                res.append((ch, m.message_id))
-    return res
+async def search_films(query):
+    results = []
+    query_lower = query.lower()
+    for channel in film_channels:
+        try:
+            async for message in app.get_chat_history(channel, limit=5000):
+                if message.text and query_lower in message.text.lower():
+                    results.append({
+                        'channel': channel,
+                        'message_id': message.id,
+                        'text': message.text[:100]
+                    })
+                    if len(results) >= 20:
+                        break
+        except Exception as e:
+            print(f"Kanal {channel} qidiruvda xatolik: {e}")
+        if len(results) >= 20:
+            break
+    return results
 
-def user_panel():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]])
-
-def admin_panel():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 Film yuklash", callback_data="upload")],
-        [InlineKeyboardButton("🎬 Film qidirish", callback_data="search")],
-        [InlineKeyboardButton("⚙️ Admin panel", callback_data="admin_inner")],
-        [InlineKeyboardButton("⛔ Chiqish", callback_data="exit")]
-    ])
-
-def admin_inner_panel():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Majburiy obuna qo‘shish", callback_data="add_mand")],
-        [InlineKeyboardButton("➖ Majburiy obuna o‘chirish", callback_data="del_mand")],
-        [InlineKeyboardButton("📜 Majburiy obuna ro‘yxati", callback_data="list_mand")],
-        [InlineKeyboardButton("➕ Film kanal qo‘shish", callback_data="add_film")],
-        [InlineKeyboardButton("➖ Film kanal o‘chirish", callback_data="del_film")],
-        [InlineKeyboardButton("📜 Film kanallari ro‘yxati", callback_data="list_film")],
-        [InlineKeyboardButton("⛔ Chiqish", callback_data="exit_inner")]
-    ])
-
-@app.on_message(filters.command(["start"]))
-async def start(_, m):
-    if m.from_user.id == ADMIN_ID:
-        await m.reply("Admin panel", reply_markup=admin_panel())
+@app.on_message(filters.command("start"))
+async def start_handler(client, message):
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name
+    total_users.add(user_id)
+    
+    if user_id == ADMIN_ID:
+        await message.reply(
+            f"👋 Assalomu alaykum, {username}!\n\n"
+            "🎛 Admin paneliga xush kelibsiz.\n"
+            "Kerakli bo'limni tanlang:",
+            reply_markup=admin_menu()
+        )
     else:
-        await m.reply("Film nomini yozing", reply_markup=user_panel())
-
-@app.on_message(filters.text & ~filters.command(["start"]))
-async def text_handler(_, m):
-    if m.from_user.id != ADMIN_ID and not await check_subs(m.from_user.id):
-        await m.reply("Majburiy obuna bo‘ling", reply_markup=user_panel())
-        return
-
-    if m.from_user.id != ADMIN_ID:
-        films = await search_film(m.text)
-        if films:
-            kb = [[InlineKeyboardButton(f"📌 {ch}", url=f"https://t.me/{ch}/{mid}")] for ch, mid in films]
-            await m.reply("🎬 Topildi", reply_markup=InlineKeyboardMarkup(kb))
+        if mandatory_channels and not await check_subscription(user_id):
+            await message.reply(
+                f"👋 Salom, {username}!\n\n"
+                "🎬 Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                reply_markup=subscription_buttons()
+            )
         else:
-            await m.reply("❌ Film topilmadi")
+            await message.reply(
+                f"👋 Salom, {username}!\n\n"
+                "🎬 Film botiga xush kelibsiz!\n"
+                "Film qidirish uchun film nomini yozing yoki menyudan tanlang:",
+                reply_markup=user_menu()
+            )
+
+@app.on_message(filters.text & ~filters.command("start"))
+async def text_handler(client, message):
+    user_id = message.from_user.id
+    text = message.text
+    
+    if user_id == ADMIN_ID:
+        if text == "🎬 Film kanallari":
+            await message.reply(
+                "🎬 Film kanallari bo'limi\n\n"
+                "Bu yerda film qidirish uchun kanallarni boshqarishingiz mumkin:",
+                reply_markup=film_channel_menu()
+            )
+            return
+        
+        elif text == "📢 Majburiy obuna":
+            await message.reply(
+                "📢 Majburiy obuna bo'limi\n\n"
+                "Bu yerda foydalanuvchilar obuna bo'lishi kerak bo'lgan kanallarni boshqarishingiz mumkin:",
+                reply_markup=mandatory_channel_menu()
+            )
+            return
+        
+        elif text == "📊 Statistika":
+            await message.reply(
+                f"📊 **Bot statistikasi**\n\n"
+                f"👥 Jami foydalanuvchilar: {len(total_users)}\n"
+                f"🔍 Bugungi qidiruvlar: {daily_searches}\n"
+                f"📈 Jami qidiruvlar: {total_searches}\n"
+                f"🎬 Film kanallari: {len(film_channels)}\n"
+                f"📢 Majburiy kanallar: {len(mandatory_channels)}\n"
+                f"📅 Sana: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+            return
+        
+        elif text == "📣 Reklama tarqatish":
+            user_states[user_id] = "waiting_broadcast"
+            await message.reply(
+                "📣 Reklama xabarini yuboring:\n\n"
+                "Xabar matn, rasm, video yoki gif bo'lishi mumkin.\n"
+                "Bekor qilish uchun /cancel yozing."
+            )
+            return
+        
+        elif text == "👤 Foydalanuvchi rejimi":
+            await message.reply(
+                "👤 Foydalanuvchi rejimiga o'tdingiz:",
+                reply_markup=user_menu()
+            )
+            return
+    
+    if user_states.get(user_id) == "waiting_broadcast" and user_id == ADMIN_ID:
+        await message.reply("⏳ Xabar barcha foydalanuvchilarga yuborilmoqda...")
+        success = 0
+        failed = 0
+        for uid in total_users:
+            try:
+                await client.copy_message(uid, message.chat.id, message.id)
+                success += 1
+                await asyncio.sleep(0.05)
+            except:
+                failed += 1
+        user_states.pop(user_id, None)
+        await message.reply(
+            f"✅ Reklama tarqatildi!\n\n"
+            f"Muvaffaqiyatli: {success}\n"
+            f"Xatolik: {failed}"
+        )
+        return
+    
+    if user_states.get(user_id) == "waiting_film_channel" and user_id == ADMIN_ID:
+        channel = text.strip()
+        if not channel.startswith("@"):
+            channel = "@" + channel
+        film_channels.append(channel)
+        user_states.pop(user_id, None)
+        await message.reply(
+            f"✅ Kanal qo'shildi: {channel}\n\n"
+            f"Jami film kanallari: {len(film_channels)}",
+            reply_markup=film_channel_menu()
+        )
+        return
+    
+    if user_states.get(user_id) == "waiting_mand_channel" and user_id == ADMIN_ID:
+        channel = text.strip()
+        if not channel.startswith("@"):
+            channel = "@" + channel
+        mandatory_channels.append(channel)
+        user_states.pop(user_id, None)
+        await message.reply(
+            f"✅ Kanal qo'shildi: {channel}\n\n"
+            f"Jami majburiy kanallar: {len(mandatory_channels)}",
+            reply_markup=mandatory_channel_menu()
+        )
+        return
+    
+    if text == "🎬 Film qidirish":
+        await message.reply("🎬 Film nomini kiriting:")
+        return
+    
+    if text == "ℹ️ Bot haqida":
+        await message.reply(
+            "ℹ️ **Bot haqida**\n\n"
+            "Bu bot orqali siz kino va seriallarni tez va oson topishingiz mumkin.\n\n"
+            "Faqat film nomini yozing va natijalarni oling!"
+        )
+        return
+    
+    if text == "📞 Aloqa":
+        await message.reply("📞 **Aloqa**\n\nSavol va takliflar uchun: @admin")
+        return
+    
+    if user_id != ADMIN_ID:
+        if not await check_subscription(user_id):
+            await message.reply(
+                "⚠️ Botdan foydalanish uchun kanallarga obuna bo'ling:",
+                reply_markup=subscription_buttons()
+            )
+            return
+        
+        global daily_searches, total_searches
+        daily_searches += 1
+        total_searches += 1
+        
+        wait_msg = await message.reply("🔍 Qidirilmoqda...")
+        results = await search_films(text)
+        
+        if results:
+            buttons = []
+            for i, result in enumerate(results[:15], 1):
+                ch_name = result['channel'].replace("@", "")
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"🎬 Natija {i}",
+                        url=f"https://t.me/{ch_name}/{result['message_id']}"
+                    )
+                ])
+            await wait_msg.edit_text(
+                f"✅ **{len(results)} ta natija topildi!**\n\n"
+                f"🔍 Qidiruv: {text}",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        else:
+            await wait_msg.edit_text(
+                f"❌ **'{text}' bo'yicha natija topilmadi**\n\n"
+                "Boshqa nom bilan qidirib ko'ring."
+            )
 
 @app.on_callback_query()
-async def cb(_, c):
-    data = c.data
-    u = c.from_user.id
-
+async def callback_handler(client, callback):
+    data = callback.data
+    user_id = callback.from_user.id
+    
     if data == "check_sub":
-        if await check_subs(u):
-            await c.answer("✅ Obuna tasdiqlandi", show_alert=True)
+        if await check_subscription(user_id):
+            await callback.answer("✅ Obuna tasdiqlandi!", show_alert=True)
+            await callback.message.edit_text(
+                f"👋 Salom, {callback.from_user.first_name}!\n\n"
+                "🎬 Film botiga xush kelibsiz!\n"
+                "Film qidirish uchun film nomini yozing yoki menyudan tanlang:",
+                reply_markup=user_menu()
+            )
         else:
-            await c.answer("❗ Majburiy obuna yo‘q", show_alert=True)
+            await callback.answer("❌ Hali obuna bo'lmadingiz!", show_alert=True)
         return
+    
+    if user_id != ADMIN_ID:
+        await callback.answer("⛔ Bu admin funksiyasi", show_alert=True)
+        return
+    
+    if data == "back_admin":
+        await callback.message.edit_text(
+            "🎛 Admin paneliga xush kelibsiz.\n"
+            "Kerakli bo'limni tanlang:",
+            reply_markup=admin_menu()
+        )
+    
+    elif data == "add_film":
+        user_states[user_id] = "waiting_film_channel"
+        await callback.message.edit_text(
+            "➕ **Film kanali qo'shish**\n\n"
+            "Kanal username kiriting (masalan: @kanalnom):"
+        )
+    
+    elif data == "del_film":
+        if film_channels:
+            removed = film_channels.pop()
+            await callback.answer(f"✅ Kanal o'chirildi: {removed}", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=film_channel_menu())
+        else:
+            await callback.answer("❌ Ro'yxat bo'sh", show_alert=True)
+    
+    elif data == "list_film":
+        if film_channels:
+            text = "📋 **Film kanallari ro'yxati:**\n\n" + "\n".join(
+                f"{i}. {ch}" for i, ch in enumerate(film_channels, 1)
+            )
+        else:
+            text = "📋 Film kanallari ro'yxati bo'sh"
+        await callback.message.edit_text(text, reply_markup=film_channel_menu())
+    
+    elif data == "add_mand":
+        user_states[user_id] = "waiting_mand_channel"
+        await callback.message.edit_text(
+            "➕ **Majburiy kanal qo'shish**\n\n"
+            "Kanal username kiriting (masalan: @kanalnom):"
+        )
+    
+    elif data == "del_mand":
+        if mandatory_channels:
+            removed = mandatory_channels.pop()
+            await callback.answer(f"✅ Kanal o'chirildi: {removed}", show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=mandatory_channel_menu())
+        else:
+            await callback.answer("❌ Ro'yxat bo'sh", show_alert=True)
+    
+    elif data == "list_mand":
+        if mandatory_channels:
+            text = "📋 **Majburiy kanallar ro'yxati:**\n\n" + "\n".join(
+                f"{i}. {ch}" for i, ch in enumerate(mandatory_channels, 1)
+            )
+        else:
+            text = "📋 Majburiy kanallar ro'yxati bo'sh"
+        await callback.message.edit_text(text, reply_markup=mandatory_channel_menu())
 
-    if u == ADMIN_ID:
-        if data == "admin_inner":
-            await c.message.edit("⚙️ Ichki admin panel", reply_markup=admin_inner_panel())
-        elif data == "exit_inner":
-            await c.message.edit("Admin panel", reply_markup=admin_panel())
-        elif data == "list_mand":
-            txt = "\n".join(mandatory_channels) if mandatory_channels else "Yo‘q"
-            await c.message.edit(f"📜 Majburiy obuna:\n{txt}")
-        elif data == "list_film":
-            txt = "\n".join(film_channels) if film_channels else "Yo‘q"
-            await c.message.edit(f"🎬 Film kanallari:\n{txt}")
-        elif data == "add_mand":
-            mandatory_channels.append("channel_username")
-            await c.answer("➕ Qo‘shildi", show_alert=True)
-        elif data == "del_mand":
-            if mandatory_channels:
-                mandatory_channels.pop()
-            await c.answer("➖ O‘chirildi", show_alert=True)
-        elif data == "add_film":
-            film_channels.append("channel_username")
-            await c.answer("➕ Qo‘shildi", show_alert=True)
-        elif data == "del_film":
-            if film_channels:
-                film_channels.pop()
-            await c.answer("➖ O‘chirildi", show_alert=True)
-
+print("🚀 Bot ishga tushdi...")
 app.run()
