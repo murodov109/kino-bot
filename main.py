@@ -25,10 +25,7 @@ mandatory_channels = []
 film_channels = []
 user_states = {}
 total_users = set()
-stats = {
-    'daily_searches': 0,
-    'total_searches': 0
-}
+stats = {'daily_searches': 0, 'total_searches': 0}
 
 def admin_menu():
     return ReplyKeyboardMarkup([
@@ -75,9 +72,8 @@ async def check_subscription(user_id):
             member = await app.get_chat_member(ch, user_id)
             if member.status in ["left", "kicked"]:
                 return False
-        except Exception as e:
-            print(f"Obuna tekshirish xatosi {ch}: {e}")
-            continue
+        except Exception:
+            return False
     return True
 
 async def search_films(query):
@@ -85,10 +81,7 @@ async def search_films(query):
     query_lower = query.lower()
     for channel in film_channels:
         try:
-            count = 0
-            async for message in app.get_chat_history(channel):
-                if count >= 3000:
-                    break
+            async for message in app.get_chat_history(channel, limit=3000):
                 if message.text and query_lower in message.text.lower():
                     results.append({
                         'channel': channel,
@@ -97,9 +90,7 @@ async def search_films(query):
                     })
                     if len(results) >= 20:
                         break
-                count += 1
-        except Exception as e:
-            print(f"Qidiruv xatosi {channel}: {e}")
+        except Exception:
             continue
         if len(results) >= 20:
             break
@@ -115,8 +106,7 @@ async def start_handler(client, message):
         if user_id == ADMIN_ID:
             await message.reply(
                 f"👋 Assalomu alaykum, {username}!\n\n"
-                "🎛 Admin paneliga xush kelibsiz.\n"
-                "Kerakli bo'limni tanlang:",
+                "🎛 Admin paneliga xush kelibsiz.\nKerakli bo'limni tanlang:",
                 reply_markup=admin_menu()
             )
         else:
@@ -129,8 +119,7 @@ async def start_handler(client, message):
             else:
                 await message.reply(
                     f"👋 Salom, {username}!\n\n"
-                    "🎬 Film botiga xush kelibsiz!\n"
-                    "Film qidirish uchun film nomini yozing yoki menyudan tanlang:",
+                    "🎬 Film botiga xush kelibsiz!\nFilm qidirish uchun film nomini yozing yoki menyudan tanlang:",
                     reply_markup=user_menu()
                 )
     except Exception as e:
@@ -139,52 +128,32 @@ async def start_handler(client, message):
 @app.on_message(filters.text & filters.private & ~filters.command("start"))
 async def text_handler(client, message):
     user_id = message.from_user.id
-    text = message.text
+    text = message.text.strip()
     
     try:
         if user_id == ADMIN_ID:
             if text == "🎬 Film kanallari":
-                await message.reply(
-                    "🎬 Film kanallari bo'limi\n\n"
-                    "Bu yerda film qidirish uchun kanallarni boshqarishingiz mumkin:",
-                    reply_markup=film_channel_menu()
-                )
+                await message.reply("🎬 Film kanallari bo'limi", reply_markup=film_channel_menu())
                 return
-            
             elif text == "📢 Majburiy obuna":
-                await message.reply(
-                    "📢 Majburiy obuna bo'limi\n\n"
-                    "Bu yerda foydalanuvchilar obuna bo'lishi kerak bo'lgan kanallarni boshqarishingiz mumkin:",
-                    reply_markup=mandatory_channel_menu()
-                )
+                await message.reply("📢 Majburiy obuna bo'limi", reply_markup=mandatory_channel_menu())
                 return
-            
             elif text == "📊 Statistika":
                 await message.reply(
-                    f"📊 **Bot statistikasi**\n\n"
-                    f"👥 Jami foydalanuvchilar: {len(total_users)}\n"
+                    f"👥 Foydalanuvchilar: {len(total_users)}\n"
                     f"🔍 Bugungi qidiruvlar: {stats['daily_searches']}\n"
                     f"📈 Jami qidiruvlar: {stats['total_searches']}\n"
                     f"🎬 Film kanallari: {len(film_channels)}\n"
                     f"📢 Majburiy kanallar: {len(mandatory_channels)}\n"
-                    f"📅 Sana: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                    f"Sana: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
                 return
-            
             elif text == "📣 Reklama tarqatish":
                 user_states[user_id] = "waiting_broadcast"
-                await message.reply(
-                    "📣 Reklama xabarini yuboring:\n\n"
-                    "Xabar matn, rasm, video yoki gif bo'lishi mumkin.\n"
-                    "Bekor qilish uchun /cancel yozing."
-                )
+                await message.reply("📣 Reklama xabarini yuboring (/cancel bekor qilish)")
                 return
-            
             elif text == "👤 Foydalanuvchi rejimi":
-                await message.reply(
-                    "👤 Foydalanuvchi rejimiga o'tdingiz:",
-                    reply_markup=user_menu()
-                )
+                await message.reply("👤 Foydalanuvchi rejimiga o'tdingiz:", reply_markup=user_menu())
                 return
         
         if user_states.get(user_id) == "waiting_broadcast" and user_id == ADMIN_ID:
@@ -203,37 +172,23 @@ async def text_handler(client, message):
                 except Exception:
                     failed += 1
             user_states.pop(user_id, None)
-            await message.reply(
-                f"✅ Reklama tarqatildi!\n\n"
-                f"Muvaffaqiyatli: {success}\n"
-                f"Xatolik: {failed}"
-            )
+            await message.reply(f"✅ Reklama tarqatildi!\nMuvaffaqiyatli: {success}\nXatolik: {failed}")
             return
         
         if user_states.get(user_id) == "waiting_film_channel" and user_id == ADMIN_ID:
-            channel = text.strip()
-            if not channel.startswith("@"):
-                channel = "@" + channel
-            film_channels.append(channel)
+            channel = text if text.startswith("@") else "@" + text
+            if channel not in film_channels:
+                film_channels.append(channel)
             user_states.pop(user_id, None)
-            await message.reply(
-                f"✅ Kanal qo'shildi: {channel}\n\n"
-                f"Jami film kanallari: {len(film_channels)}",
-                reply_markup=film_channel_menu()
-            )
+            await message.reply(f"Kanal qo'shildi: {channel}", reply_markup=film_channel_menu())
             return
         
         if user_states.get(user_id) == "waiting_mand_channel" and user_id == ADMIN_ID:
-            channel = text.strip()
-            if not channel.startswith("@"):
-                channel = "@" + channel
-            mandatory_channels.append(channel)
+            channel = text if text.startswith("@") else "@" + text
+            if channel not in mandatory_channels:
+                mandatory_channels.append(channel)
             user_states.pop(user_id, None)
-            await message.reply(
-                f"✅ Kanal qo'shildi: {channel}\n\n"
-                f"Jami majburiy kanallar: {len(mandatory_channels)}",
-                reply_markup=mandatory_channel_menu()
-            )
+            await message.reply(f"Kanal qo'shildi: {channel}", reply_markup=mandatory_channel_menu())
             return
         
         if text == "🎬 Film qidirish":
@@ -241,23 +196,16 @@ async def text_handler(client, message):
             return
         
         if text == "ℹ️ Bot haqida":
-            await message.reply(
-                "ℹ️ **Bot haqida**\n\n"
-                "Bu bot orqali siz kino va seriallarni tez va oson topishingiz mumkin.\n\n"
-                "Faqat film nomini yozing va natijalarni oling!"
-            )
+            await message.reply("ℹ️ Bu bot orqali kino va seriallarni tez topishingiz mumkin.")
             return
         
         if text == "📞 Aloqa":
-            await message.reply("📞 **Aloqa**\n\nSavol va takliflar uchun: @admin")
+            await message.reply("📞 Savol va takliflar: @admin")
             return
         
         if user_id != ADMIN_ID:
             if not await check_subscription(user_id):
-                await message.reply(
-                    "⚠️ Botdan foydalanish uchun kanallarga obuna bo'ling:",
-                    reply_markup=subscription_buttons()
-                )
+                await message.reply("⚠️ Kanalga obuna bo'ling:", reply_markup=subscription_buttons())
                 return
             
             stats['daily_searches'] += 1
@@ -267,25 +215,10 @@ async def text_handler(client, message):
             results = await search_films(text)
             
             if results:
-                buttons = []
-                for i, result in enumerate(results[:15], 1):
-                    ch_name = result['channel'].replace("@", "")
-                    buttons.append([
-                        InlineKeyboardButton(
-                            f"🎬 Natija {i}",
-                            url=f"https://t.me/{ch_name}/{result['message_id']}"
-                        )
-                    ])
-                await wait_msg.edit_text(
-                    f"✅ **{len(results)} ta natija topildi!**\n\n"
-                    f"🔍 Qidiruv: {text}",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
+                buttons = [[InlineKeyboardButton(f"🎬 Natija {i+1}", url=f"https://t.me/{r['channel'].replace('@','')}/{r['message_id']}")] for i, r in enumerate(results[:15])]
+                await wait_msg.edit_text(f"{len(results)} ta natija topildi!\nQidiruv: {text}", reply_markup=InlineKeyboardMarkup(buttons))
             else:
-                await wait_msg.edit_text(
-                    f"❌ **'{text}' bo'yicha natija topilmadi**\n\n"
-                    "Boshqa nom bilan qidirib ko'ring."
-                )
+                await wait_msg.edit_text(f"❌ '{text}' bo'yicha natija topilmadi")
     except Exception as e:
         print(f"Text handler xatosi: {e}")
 
@@ -293,19 +226,12 @@ async def text_handler(client, message):
 async def callback_handler(client, callback):
     data = callback.data
     user_id = callback.from_user.id
-    
     try:
         if data == "check_sub":
             if await check_subscription(user_id):
                 await callback.answer("✅ Obuna tasdiqlandi!", show_alert=True)
                 await callback.message.delete()
-                await client.send_message(
-                    user_id,
-                    f"👋 Salom, {callback.from_user.first_name}!\n\n"
-                    "🎬 Film botiga xush kelibsiz!\n"
-                    "Film qidirish uchun film nomini yozing:",
-                    reply_markup=user_menu()
-                )
+                await client.send_message(user_id, "🎬 Film botiga xush kelibsiz!", reply_markup=user_menu())
             else:
                 await callback.answer("❌ Hali obuna bo'lmadingiz!", show_alert=True)
             return
@@ -316,60 +242,33 @@ async def callback_handler(client, callback):
         
         if data == "back_admin":
             await callback.message.delete()
-            await client.send_message(
-                user_id,
-                "🎛 Admin paneliga xush kelibsiz.\nKerakli bo'limni tanlang:",
-                reply_markup=admin_menu()
-            )
-        
+            await client.send_message(user_id, "🎛 Admin paneliga xush kelibsiz.", reply_markup=admin_menu())
         elif data == "add_film":
             user_states[user_id] = "waiting_film_channel"
-            await callback.message.edit_text(
-                "➕ **Film kanali qo'shish**\n\n"
-                "Kanal username kiriting (masalan: @kanalnom):"
-            )
-        
+            await callback.message.edit_text("➕ Kanal username kiriting (@kanal):")
         elif data == "del_film":
             if film_channels:
                 removed = film_channels.pop()
-                await callback.answer(f"✅ O'chirildi: {removed}", show_alert=True)
-                await callback.message.edit_reply_markup(reply_markup=film_channel_menu())
+                await callback.answer(f"O'chirildi: {removed}", show_alert=True)
             else:
-                await callback.answer("❌ Ro'yxat bo'sh", show_alert=True)
-        
+                await callback.answer("Ro'yxat bo'sh", show_alert=True)
+            await callback.message.edit_reply_markup(film_channel_menu())
         elif data == "list_film":
-            if film_channels:
-                text = "📋 **Film kanallari ro'yxati:**\n\n" + "\n".join(
-                    f"{i}. {ch}" for i, ch in enumerate(film_channels, 1)
-                )
-            else:
-                text = "📋 Film kanallari ro'yxati bo'sh"
+            text = "📋 Film kanallari:\n" + "\n".join(f"{i+1}. {ch}" for i, ch in enumerate(film_channels)) if film_channels else "Bo'sh"
             await callback.message.edit_text(text, reply_markup=film_channel_menu())
-        
         elif data == "add_mand":
             user_states[user_id] = "waiting_mand_channel"
-            await callback.message.edit_text(
-                "➕ **Majburiy kanal qo'shish**\n\n"
-                "Kanal username kiriting (masalan: @kanalnom):"
-            )
-        
+            await callback.message.edit_text("➕ Majburiy kanal username kiriting (@kanal):")
         elif data == "del_mand":
             if mandatory_channels:
                 removed = mandatory_channels.pop()
-                await callback.answer(f"✅ O'chirildi: {removed}", show_alert=True)
-                await callback.message.edit_reply_markup(reply_markup=mandatory_channel_menu())
+                await callback.answer(f"O'chirildi: {removed}", show_alert=True)
             else:
-                await callback.answer("❌ Ro'yxat bo'sh", show_alert=True)
-        
+                await callback.answer("Ro'yxat bo'sh", show_alert=True)
+            await callback.message.edit_reply_markup(mandatory_channel_menu())
         elif data == "list_mand":
-            if mandatory_channels:
-                text = "📋 **Majburiy kanallar ro'yxati:**\n\n" + "\n".join(
-                    f"{i}. {ch}" for i, ch in enumerate(mandatory_channels, 1)
-                )
-            else:
-                text = "📋 Majburiy kanallar ro'yxati bo'sh"
+            text = "📋 Majburiy kanallar:\n" + "\n".join(f"{i+1}. {ch}" for i, ch in enumerate(mandatory_channels)) if mandatory_channels else "Bo'sh"
             await callback.message.edit_text(text, reply_markup=mandatory_channel_menu())
-    
     except Exception as e:
         print(f"Callback xatosi: {e}")
 
