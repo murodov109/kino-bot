@@ -1,9 +1,9 @@
-
 import os
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.errors import UserNotParticipant
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup
+from pyrogram.errors import UserNotParticipant, FloodWait
 from dotenv import load_dotenv
+import asyncio
 import time
 
 load_dotenv()
@@ -25,12 +25,13 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 def admin_panel_markup():
-    return [
+    keyboard = [
         ["📊 Statistika", "📢 Reklama tarqatish"],
         ["➕ Majburiy obuna", "➖ Obuna o'chirish"],
         ["🎬 Film qo'shish", "🗑 Film o'chirish"],
         ["👤 Admin qo'shish", "📋 Kanallar ro'yxati"]
     ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def check_subscription(user_id):
     if not channels:
@@ -40,12 +41,15 @@ async def check_subscription(user_id):
             await app.get_chat_member(channel, user_id)
         except UserNotParticipant:
             return False
+        except Exception:
+            continue
     return True
 
 def subscription_markup():
     buttons = []
     for i, channel in enumerate(channels):
-        buttons.append([InlineKeyboardButton(f"Kanal {i+1}", url=f"https://t.me/{channel.replace('@', '')}")])
+        channel_clean = channel.replace("@", "")
+        buttons.append([InlineKeyboardButton(f"Kanal {i+1}", url=f"https://t.me/{channel_clean}")])
     buttons.append([InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")])
     return InlineKeyboardMarkup(buttons)
 
@@ -55,12 +59,12 @@ async def start_cmd(client, message: Message):
     stats["users"].add(user_id)
     
     if is_admin(user_id):
-        await message.reply("🎬 Kino Bot Admin Panel", reply_markup={"keyboard": admin_panel_markup(), "resize_keyboard": True})
+        await message.reply_text("🎬 Kino Bot Admin Panel", reply_markup=admin_panel_markup())
     else:
         if not await check_subscription(user_id):
-            await message.reply("❌ Botdan foydalanish uchun kanallarga obuna bo'ling:", reply_markup=subscription_markup())
+            await message.reply_text("❌ Botdan foydalanish uchun kanallarga obuna bo'ling:", reply_markup=subscription_markup())
         else:
-            await message.reply(f"🎬 Kino kodini yuboring\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}")
+            await message.reply_text(f"🎬 Kino kodini yuboring\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}")
 
 @app.on_message(filters.private & filters.text & ~filters.command("start"))
 async def handle_message(client, message: Message):
@@ -69,15 +73,16 @@ async def handle_message(client, message: Message):
     
     if is_admin(user_id):
         if text == "📊 Statistika":
-            await message.reply(f"👥 Foydalanuvchilar: {len(stats['users'])}\n📊 So'rovlar: {stats['total_requests']}\n🎬 Filmlar: {len(movies)}")
+            msg = f"👥 Foydalanuvchilar: {len(stats['users'])}\n📊 So'rovlar: {stats['total_requests']}\n🎬 Filmlar: {len(movies)}"
+            await message.reply_text(msg)
         
         elif text == "📢 Reklama tarqatish":
             upload_state[user_id] = "waiting_ad"
-            await message.reply("📢 Reklama xabarini yuboring:")
+            await message.reply_text("📢 Reklama xabarini yuboring:")
         
         elif text == "➕ Majburiy obuna":
             upload_state[user_id] = "waiting_channel"
-            await message.reply("📢 Kanal username yuboring (@channel):")
+            await message.reply_text("📢 Kanal username yuboring (@channel):")
         
         elif text == "➖ Obuna o'chirish":
             if channels:
@@ -85,14 +90,14 @@ async def handle_message(client, message: Message):
                 for i, ch in enumerate(channels):
                     msg += f"{i+1}. {ch}\n"
                 msg += "\n🗑 O'chirish uchun raqamni yuboring:"
-                await message.reply(msg)
+                await message.reply_text(msg)
                 upload_state[user_id] = "delete_channel"
             else:
-                await message.reply("❌ Kanallar yo'q")
+                await message.reply_text("❌ Kanallar yo'q")
         
         elif text == "🎬 Film qo'shish":
             upload_state[user_id] = "waiting_video"
-            await message.reply("🎥 Film videosini yuboring:")
+            await message.reply_text("🎥 Film videosini yuboring:")
         
         elif text == "🗑 Film o'chirish":
             if movies:
@@ -100,23 +105,23 @@ async def handle_message(client, message: Message):
                 for code, data in movies.items():
                     msg += f"Kod: {code} - {data['name']}\n"
                 msg += "\n🗑 O'chirish uchun kodni yuboring:"
-                await message.reply(msg)
+                await message.reply_text(msg)
                 upload_state[user_id] = "delete_movie"
             else:
-                await message.reply("❌ Filmlar yo'q")
+                await message.reply_text("❌ Filmlar yo'q")
         
         elif text == "👤 Admin qo'shish":
             upload_state[user_id] = "waiting_admin"
-            await message.reply("👤 Admin ID raqamini yuboring:")
+            await message.reply_text("👤 Admin ID raqamini yuboring:")
         
         elif text == "📋 Kanallar ro'yxati":
             if channels:
                 msg = "📋 Majburiy obuna kanallari:\n\n"
                 for i, ch in enumerate(channels):
                     msg += f"{i+1}. {ch}\n"
-                await message.reply(msg)
+                await message.reply_text(msg)
             else:
-                await message.reply("❌ Kanallar yo'q")
+                await message.reply_text("❌ Kanallar yo'q")
         
         elif user_id in upload_state:
             state = upload_state[user_id]
@@ -127,45 +132,56 @@ async def handle_message(client, message: Message):
                     try:
                         await client.send_message(uid, text)
                         success += 1
-                    except:
+                        await asyncio.sleep(0.05)
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value)
+                    except Exception:
                         pass
-                await message.reply(f"✅ {success} ta foydalanuvchiga yuborildi")
+                await message.reply_text(f"✅ {success} ta foydalanuvchiga yuborildi")
                 del upload_state[user_id]
             
             elif state == "waiting_channel":
                 if text.startswith("@"):
                     channels.append(text)
-                    await message.reply(f"✅ Kanal qo'shildi: {text}")
+                    await message.reply_text(f"✅ Kanal qo'shildi: {text}")
                 else:
-                    await message.reply("❌ @ bilan boshlaning")
+                    await message.reply_text("❌ @ bilan boshlangan kanal nomini yuboring")
                 del upload_state[user_id]
             
             elif state == "delete_channel":
                 try:
                     idx = int(text) - 1
-                    ch = channels.pop(idx)
-                    await message.reply(f"✅ O'chirildi: {ch}")
-                except:
-                    await message.reply("❌ Noto'g'ri raqam")
+                    if 0 <= idx < len(channels):
+                        ch = channels.pop(idx)
+                        await message.reply_text(f"✅ O'chirildi: {ch}")
+                    else:
+                        await message.reply_text("❌ Noto'g'ri raqam")
+                except ValueError:
+                    await message.reply_text("❌ Faqat raqam yuboring")
                 del upload_state[user_id]
             
             elif state == "waiting_name":
                 upload_state[user_id] = {"state": "waiting_code", "video": upload_state[user_id]["video"], "name": text}
-                await message.reply("🔢 Film kodini yuboring:")
+                await message.reply_text("🔢 Film kodini yuboring:")
             
-            elif state.get("state") == "waiting_code":
+            elif isinstance(state, dict) and state.get("state") == "waiting_code":
                 code = text
                 video_data = upload_state[user_id]
-                movies[code] = {"video_id": video_data["video"]["id"], "name": video_data["name"], "duration": video_data["video"]["duration"], "size": video_data["video"]["size"]}
-                await message.reply(f"✅ Film qo'shildi\nKod: {code}\nNom: {video_data['name']}")
+                movies[code] = {
+                    "video_id": video_data["video"]["id"],
+                    "name": video_data["name"],
+                    "duration": video_data["video"]["duration"],
+                    "size": video_data["video"]["size"]
+                }
+                await message.reply_text(f"✅ Film qo'shildi\nKod: {code}\nNom: {video_data['name']}")
                 del upload_state[user_id]
             
             elif state == "delete_movie":
                 if text in movies:
                     del movies[text]
-                    await message.reply(f"✅ Film o'chirildi: {text}")
+                    await message.reply_text(f"✅ Film o'chirildi: {text}")
                 else:
-                    await message.reply("❌ Film topilmadi")
+                    await message.reply_text("❌ Film topilmadi")
                 del upload_state[user_id]
             
             elif state == "waiting_admin":
@@ -173,25 +189,30 @@ async def handle_message(client, message: Message):
                     new_admin = int(text)
                     if new_admin not in ADMIN_IDS:
                         ADMIN_IDS.append(new_admin)
-                        await message.reply(f"✅ Admin qo'shildi: {new_admin}")
+                        await message.reply_text(f"✅ Admin qo'shildi: {new_admin}")
                     else:
-                        await message.reply("❌ Bu ID allaqachon admin")
-                except:
-                    await message.reply("❌ Noto'g'ri ID")
+                        await message.reply_text("❌ Bu ID allaqachon admin")
+                except ValueError:
+                    await message.reply_text("❌ Noto'g'ri ID raqam")
                 del upload_state[user_id]
     else:
         if not await check_subscription(user_id):
-            await message.reply("❌ Avval kanallarga obuna bo'ling:", reply_markup=subscription_markup())
+            await message.reply_text("❌ Avval kanallarga obuna bo'ling:", reply_markup=subscription_markup())
             return
         
-        code = text
+        code = text.strip()
         if code in movies:
             stats["total_requests"] += 1
             movie = movies[code]
-            caption = f"🎬 {movie['name']}\n⏱ Davomiylik: {movie['duration']//60} daqiqa\n📦 Hajm: {movie['size']/(1024*1024):.1f} MB\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}"
-            await client.send_video(user_id, movie["video_id"], caption=caption)
+            duration_min = movie['duration'] // 60
+            size_mb = movie['size'] / (1024 * 1024)
+            caption = f"🎬 {movie['name']}\n⏱ Davomiylik: {duration_min} daqiqa\n📦 Hajm: {size_mb:.1f} MB\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}"
+            try:
+                await client.send_video(user_id, movie["video_id"], caption=caption)
+            except Exception:
+                await message.reply_text("❌ Xatolik yuz berdi")
         else:
-            await message.reply(f"❌ Film topilmadi\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}")
+            await message.reply_text(f"❌ Film topilmadi\n\n🎥 Eng yangi premyeralar faqat bizda @{BOT_USERNAME}")
 
 @app.on_message(filters.private & filters.video)
 async def handle_video(client, message: Message):
@@ -200,9 +221,18 @@ async def handle_video(client, message: Message):
     if is_admin(user_id) and user_id in upload_state and upload_state[user_id] == "waiting_video":
         duration = message.video.duration
         size = message.video.file_size
-        upload_state[user_id] = {"video": {"id": message.video.file_id, "duration": duration, "size": size}}
-        await message.reply(f"✅ Video qabul qilindi\n⏱ Davomiylik: {duration//60} daqiqa\n📦 Hajm: {size/(1024*1024):.1f} MB\n\n📝 Film nomini yuboring:")
-        upload_state[user_id] = {"state": "waiting_name", "video": {"id": message.video.file_id, "duration": duration, "size": size}}
+        duration_min = duration // 60
+        size_mb = size / (1024 * 1024)
+        
+        upload_state[user_id] = {
+            "state": "waiting_name",
+            "video": {
+                "id": message.video.file_id,
+                "duration": duration,
+                "size": size
+            }
+        }
+        await message.reply_text(f"✅ Video qabul qilindi\n⏱ Davomiylik: {duration_min} daqiqa\n📦 Hajm: {size_mb:.1f} MB\n\n📝 Film nomini yuboring:")
 
 @app.on_callback_query(filters.regex("check_sub"))
 async def check_sub_callback(client, callback_query: CallbackQuery):
@@ -214,4 +244,5 @@ async def check_sub_callback(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Barcha kanallarga obuna bo'ling!", show_alert=True)
 
+print("Bot ishga tushdi...")
 app.run()
