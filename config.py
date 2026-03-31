@@ -1,0 +1,6 @@
+# Bot Configuration
+
+API_TOKEN = 'YOUR_API_TOKEN'
+API_SECRET = 'YOUR_API_SECRET'
+INITIAL_SETTING_1 = 'value1'
+INITIAL_SETTING_2 = 'value2'
