@@ -1,18 +1,11 @@
-# Ignoring sensitive files and cache directories
-
-# Node modules
 node_modules/
 
-# Environment variables
 .env
 
-# Cache directories
 .cache/
 
-# Logs
 logs/
 *.log
 
-# Python cache files
 __pycache__/
 *.py[cod]
